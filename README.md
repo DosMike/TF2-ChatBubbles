@@ -16,4 +16,4 @@ between players that still triggers chat bubbles.
 Requirements
 -----
 - smlib
-- tf2rputils (for managed CursorAnnotations)
+- [tf2hudmsg](https://github.com/DosMike/tf2hudmsg) (for managed CursorAnnotations)
