@@ -6,12 +6,12 @@
 #include <smlib>
 #include <clientprefs>
 
-#include "tf2rputils.inc"
+#include "tf2hudmsg.inc"
 
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w24b"
+#define PLUGIN_VERSION "21w29a"
 
 #define TF2_MAXPLAYERS 32
 
@@ -55,7 +55,7 @@ public void OnPluginStart() {
 	for (int i=1; i<=TF2_MAXPLAYERS; i++) {
 		clientBubble[i] = CursorAnnotation();
 		clientBubble[i].SetLifetime(5.0);
-		if (Client_IsIngame(i)) {
+		if (Client_IsIngame(i) && !IsFakeClient(i)) {
 			if (IsPlayerAlive(i)) maskAlive |= clientBit(i);
 			team = GetClientTeam(i);
 			if (team == TFTeam_Red) maskRED |= clientBit(i);
@@ -168,6 +168,7 @@ public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, i
 public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId( event.GetInt("userid") );
 	TFTeam team = view_as<TFTeam>( event.GetInt("team") );
+	if (IsFakeClient(client)) return;
 	
 	int bit = clientBit(client);
 	switch (team) {
@@ -206,14 +207,18 @@ public bool canSeeTraceFilter(int entity, int contentsMask, any data) {
 	return entity == data;
 }
 static bool traceCanSee(int client, int target, float maxdistsquared) {
-	if (!Client_IsIngame(client) || !Client_IsIngame(target) || !IsPlayerAlive(client) || !IsPlayerAlive(target))
+	if (!Client_IsIngame(client) || !Client_IsIngame(target) ||
+		!IsPlayerAlive(client) || !IsPlayerAlive(target) ||
+		!IsFakeClient(client) || !IsFakeClient(target))
 		return false;
+	
 	float posClient[3], posTarget[3], mins[3]={-14.0,0.0,-14.0}, maxs[3]={14.0,72.0,14.0};
 	Entity_GetAbsOrigin(client, posClient);
 	Entity_GetAbsOrigin(target, posTarget);
 	float distance = GetVectorDistance(posClient, posTarget, true);
 	if (distance > maxdistsquared)
 		return false;
+	
 	// mins and maxs are only rough estimates, but that's ok
 	Handle ray = TR_TraceHullFilterEx(posClient, posTarget, mins, maxs, MASK_VISIBLE, canSeeTraceFilter, target);
 	bool result = TR_DidHit(ray);
