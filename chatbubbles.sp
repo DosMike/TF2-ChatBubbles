@@ -11,7 +11,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w29a"
+#define PLUGIN_VERSION "21w29b"
 
 #define TF2_MAXPLAYERS 32
 
@@ -36,6 +36,8 @@ int maskCookieHidden;
 
 ConVar cvar_BubbleDistance;
 ConVar cvar_BubbleEnabled;
+
+static Handle playerTraceTimer;
 
 public void OnPluginStart() {
 	AddCommandListener(commandSay, "say");
@@ -66,6 +68,8 @@ public void OnPluginStart() {
 		}
 	}
 	
+	OnMapStart();
+	
 	PrintToChatAll("[Chat Bubbles] Version %s loaded!", PLUGIN_VERSION);
 }
 
@@ -73,15 +77,18 @@ public void OnPluginEnd() {
 	for (int i=1; i<=TF2_MAXPLAYERS; i++) {
 		clientBubble[i].Close();
 	}
+	OnMapEnd();
 }
 
-static Handle playerTraceTimer;
 public void OnMapStart() {
-	playerTraceTimer = CreateTimer(0.1, Timer_PlayerTracing, _, TIMER_REPEAT);
+	if (playerTraceTimer == INVALID_HANDLE)
+		playerTraceTimer = CreateTimer(0.1, Timer_PlayerTracing, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 public void OnMapEnd() {
 	KillTimer(playerTraceTimer);
+	playerTraceTimer = INVALID_HANDLE;
 }
+
 public Action Timer_PlayerTracing(Handle timer) {
 	updateClientMasks();
 }
@@ -207,17 +214,20 @@ public bool canSeeTraceFilter(int entity, int contentsMask, any data) {
 	return entity == data;
 }
 static bool traceCanSee(int client, int target, float maxdistsquared) {
+	if (!Client_IsValid(client) || !Client_IsValid(target)) return false;
 	if (!Client_IsIngame(client) || !Client_IsIngame(target) ||
 		!IsPlayerAlive(client) || !IsPlayerAlive(target) ||
-		!IsFakeClient(client) || !IsFakeClient(target))
+		IsFakeClient(client) || IsFakeClient(target)) {
 		return false;
+	}
 	
 	float posClient[3], posTarget[3], mins[3]={-14.0,0.0,-14.0}, maxs[3]={14.0,72.0,14.0};
 	Entity_GetAbsOrigin(client, posClient);
 	Entity_GetAbsOrigin(target, posTarget);
 	float distance = GetVectorDistance(posClient, posTarget, true);
-	if (distance > maxdistsquared)
+	if (distance > maxdistsquared) {
 		return false;
+	}
 	
 	// mins and maxs are only rough estimates, but that's ok
 	Handle ray = TR_TraceHullFilterEx(posClient, posTarget, mins, maxs, MASK_VISIBLE, canSeeTraceFilter, target);
@@ -227,10 +237,11 @@ static bool traceCanSee(int client, int target, float maxdistsquared) {
 }
 static void updateClientMasks() {
 	float mdist = cvar_BubbleDistance.FloatValue;
+	mdist*=mdist;
 	for (int i=1; i<TF2_MAXPLAYERS; i++) {
 		for (int j=i+1; j<=TF2_MAXPLAYERS; j++) {
 			
-			if (traceCanSee(i,j, mdist*mdist)) {
+			if (traceCanSee(i,j, mdist)) {
 				maskCanSee[i] |= (1<<j);
 				maskCanSee[j] |= (1<<i);
 			} else {
