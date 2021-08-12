@@ -3,6 +3,7 @@
 #include <sourcemod>
 #include <basecomm>
 #include <tf2>
+#include <tf2_stocks>
 #include <smlib>
 #include <clientprefs>
 
@@ -11,7 +12,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w29b"
+#define PLUGIN_VERSION "21w32a"
 
 #define TF2_MAXPLAYERS 32
 
@@ -241,12 +242,20 @@ static void updateClientMasks() {
 	for (int i=1; i<TF2_MAXPLAYERS; i++) {
 		for (int j=i+1; j<=TF2_MAXPLAYERS; j++) {
 			
-			if (traceCanSee(i,j, mdist)) {
-				maskCanSee[i] |= (1<<j);
-				maskCanSee[j] |= (1<<i);
-			} else {
-				maskCanSee[i] &=~ (1<<j);
-				maskCanSee[j] &=~ (1<<i);
+			bool canSee = traceCanSee(i,j, mdist);
+			
+			//perspecive i: i has not muted j and they can see each other
+			if (canSee && !IsClientMuted(i,j)) {
+				maskCanSee[i] |= clientBit(j);
+			} else { //i muted j or los is broken
+				maskCanSee[i] &=~ clientBit(j);
+			}
+			
+			//perspecive j: j has not muted i and they can see each other
+			if (canSee && !IsClientMuted(j,i)) {
+				maskCanSee[j] |= clientBit(i);
+			} else { //j muted i or los is broken
+				maskCanSee[j] &=~ clientBit(i);
 			}
 			
 		}
@@ -276,18 +285,33 @@ static TFTeam clientBubbleTeam(int client, const char[] message) {
 	return TFTeam_Unassigned;
 }
 
+static Action handleSay(int client, const char[] message, bool teamSay) {
+	TFTeam team = clientBubbleTeam(client, message);
+	if (team <= TFTeam_Spectator) return Plugin_Continue;
+	
+	//basic targets: alive, has them fully enabled, can see the source, not the source
+	int targets = maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[client] & ~clientBit(client);
+	
+	//check if player is invisible
+	if (TF2_IsPlayerInCondition(client, TFCond_Cloaked))
+		return Plugin_Continue;
+	
+	//if the player is disguised, play as say to not give away the actual team
+	if (teamSay && !(TF2_IsPlayerInCondition(client, TFCond_Disguising)|TF2_IsPlayerInCondition(client, TFCond_Disguised)|TF2_IsPlayerInCondition(client, TFCond_DisguisedAsDispenser))) {
+		//otherwise we mask the team for team say
+		targets &= (team == TFTeam_Red) ? maskRED : maskBLU;
+	}
+	
+	bubble(client, message, targets);
+	return Plugin_Continue;
+}
+
 public Action commandSay(int client, const char[] command, int argc) {
 	if (cvar_BubbleEnabled.IntValue != 1 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
-	TFTeam team = clientBubbleTeam(client, message);
-	if (team == TFTeam_Unassigned)
-		return Plugin_Continue;
-	int targets = maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[client];
-	targets &=~ (1<<client);
-	bubble(client, message, targets);
-	return Plugin_Continue;
+	return handleSay(client, message, false);
 }
 
 public Action commandSayTeam(int client, const char[] command, int argc) {
@@ -295,12 +319,5 @@ public Action commandSayTeam(int client, const char[] command, int argc) {
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
-	TFTeam team = clientBubbleTeam(client, message);
-	if (team == TFTeam_Unassigned)
-		return Plugin_Continue;
-	int targets = (team == TFTeam_Red) ? maskRED : maskBLU;
-	targets &= maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[client];
-	targets &=~ (1<<client);
-	bubble(client, message, targets);
-	return Plugin_Continue;
+	return handleSay(client, message, true);
 }
