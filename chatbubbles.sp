@@ -12,7 +12,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w32a"
+#define PLUGIN_VERSION "21w33a"
 
 #define TF2_MAXPLAYERS 32
 
@@ -285,16 +285,15 @@ static TFTeam clientBubbleTeam(int client, const char[] message) {
 	return TFTeam_Unassigned;
 }
 
-static Action handleSay(int client, const char[] message, bool teamSay) {
+static void handleSay(int client, const char[] message, bool teamSay) {
 	TFTeam team = clientBubbleTeam(client, message);
-	if (team <= TFTeam_Spectator) return Plugin_Continue;
+	if (team <= TFTeam_Spectator) return;
 	
 	//basic targets: alive, has them fully enabled, can see the source, not the source
 	int targets = maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[client] & ~clientBit(client);
 	
 	//check if player is invisible
-	if (TF2_IsPlayerInCondition(client, TFCond_Cloaked))
-		return Plugin_Continue;
+	if (TF2_IsPlayerInCondition(client, TFCond_Cloaked)) return;
 	
 	//if the player is disguised, play as say to not give away the actual team
 	if (teamSay && !(TF2_IsPlayerInCondition(client, TFCond_Disguising)|TF2_IsPlayerInCondition(client, TFCond_Disguised)|TF2_IsPlayerInCondition(client, TFCond_DisguisedAsDispenser))) {
@@ -303,7 +302,6 @@ static Action handleSay(int client, const char[] message, bool teamSay) {
 	}
 	
 	bubble(client, message, targets);
-	return Plugin_Continue;
 }
 
 public Action commandSay(int client, const char[] command, int argc) {
@@ -311,7 +309,10 @@ public Action commandSay(int client, const char[] command, int argc) {
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
-	return handleSay(client, message, false);
+	if (!TrimString(message)) return Plugin_Continue;
+	EscapeVGUILocalization(message, sizeof(message));
+	handleSay(client, message, false);
+	return Plugin_Continue;
 }
 
 public Action commandSayTeam(int client, const char[] command, int argc) {
@@ -319,5 +320,8 @@ public Action commandSayTeam(int client, const char[] command, int argc) {
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
-	return handleSay(client, message, true);
+	if (!TrimString(message)) return Plugin_Continue;
+	EscapeVGUILocalization(message, sizeof(message));
+	handleSay(client, message, true);
+	return Plugin_Continue;
 }
