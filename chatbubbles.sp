@@ -12,7 +12,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w33a"
+#define PLUGIN_VERSION "21w33b"
 
 #define TF2_MAXPLAYERS 32
 
@@ -37,6 +37,10 @@ int maskCookieHidden;
 
 ConVar cvar_BubbleDistance;
 ConVar cvar_BubbleEnabled;
+ConVar cvar_BubbleDefaultState;
+float cval_BubbleDistance;
+int cval_BubbleEnabled;
+int cval_BubbleDefaultState;
 
 static Handle playerTraceTimer;
 
@@ -46,6 +50,11 @@ public void OnPluginStart() {
 	
 	cvar_BubbleDistance = CreateConVar("sm_chatbubble_distance", "500", "Maximum distance in hammer units to display chat bubble for", FCVAR_ARCHIVE|FCVAR_NOTIFY, true, 50.0);
 	cvar_BubbleEnabled = CreateConVar("sm_chatbubble_enabled", "1", "0 = disabled, 1 = say & teamsay, 2 = teamsay only", FCVAR_ARCHIVE|FCVAR_NOTIFY, true, 0.0, true, 2.0);
+	cvar_BubbleDefaultState = CreateConVar("sm_chatbubble_default", "1", "Default state of chat bubbles for players: 0 = disabled, 1 = enabled, 2 = hidden (send, don't show)", FCVAR_ARCHIVE|FCVAR_NOTIFY, true, 0.0, true, 2.0);
+	cvar_BubbleDistance.AddChangeHook(OnConVarChanged);
+	cvar_BubbleEnabled.AddChangeHook(OnConVarChanged);
+	cvar_BubbleDefaultState.AddChangeHook(OnConVarChanged);
+	OnConVarChanged(null,"","");
 	
 	RegClientCookie(COOKIE_HIDE, "Set whether you can see chat bubbles or not", CookieAccess_Public);
 	RegClientCookie(COOKIE_OFF, "Completely disables chat bubbles for you", CookieAccess_Public);
@@ -99,18 +108,34 @@ public void OnClientCookiesCached(int client) {
 	char buffer[2];
 	if ((cookie=FindClientCookie(COOKIE_HIDE)) != INVALID_HANDLE) {
 		GetClientCookie(client, cookie, buffer, sizeof(buffer));
-		if (!!StringToInt(buffer)) // is hidden
+		bool value;
+		if (buffer[0]==0) { // no value set yet, check and set default
+			value = cval_BubbleDefaultState == 2;
+			SetClientCookie(client, cookie, value?"1":"0");
+		} else value = !!StringToInt(buffer);
+			
+		if (value)
 			maskCookieHidden |= clientBit(client);
-		else // is displayed
+		else
 			maskCookieHidden &=~ clientBit(client);
-	} else maskCookieHidden &=~ clientBit(client);
+	} else { //cookie is missing
+		maskCookieHidden &=~ clientBit(client);
+	}
 	if ((cookie=FindClientCookie(COOKIE_OFF)) != INVALID_HANDLE) {
 		GetClientCookie(client, cookie, buffer, sizeof(buffer));
-		if (!!StringToInt(buffer)) // is disabled
-			maskCookieEnabled &=~ clientBit(client);
-		else // is enabled
+		bool value;
+		if (buffer[0]==0) { // no value set yet, check and set default
+			value = cval_BubbleDefaultState != 0;
+			SetClientCookie(client, cookie, value?"1":"0");
+		} else value = !!StringToInt(buffer);
+		
+		if (value)
 			maskCookieEnabled |= clientBit(client);
-	} else maskCookieEnabled |= clientBit(client);
+		else
+			maskCookieEnabled &=~ clientBit(client);
+	} else { //cookie is missing
+		maskCookieEnabled |= clientBit(client);
+	}
 }
 
 public void cookieMenuHandler(int client, CookieMenuAction action, any info, char[] buffer, int maxlen) {
@@ -121,18 +146,20 @@ public void cookieMenuHandler(int client, CookieMenuAction action, any info, cha
 
 void showSettingsMenu(int client) {
 	Menu menu = new Menu(settingsMenuActionHandler);
-	menu.SetTitle("Chat Bubbles");
-	if (!!(maskCookieHidden & clientBit(client))) {
-		menu.AddItem("show", "Show");
-	} else {
-		menu.AddItem("hide", "Hide");
-	}
 	if (!!(maskCookieEnabled & clientBit(client))) {
-		menu.AddItem("off", "Disable");
+		if (!!(maskCookieHidden & clientBit(client))) {
+			menu.SetTitle("Chat Bubbles\n \nYou send chat bubbles but can't see others\n ");
+			menu.AddItem("off", "Hidden");
+		} else {
+			menu.SetTitle("Chat Bubbles\n \nYou see and send chat bubbles\n ");
+			menu.AddItem("hide", "Enabled");
+		}
 	} else {
-		menu.AddItem("on", "Enable");
+		menu.SetTitle("Chat Bubbles\n \nChat bubbles are complete disabled for you\n ");
+		menu.AddItem("on", "Disabled");
 	}
-	menu.ExitBackButton = true;
+	menu.Pagination = MENU_NO_PAGINATION;
+	menu.ExitButton = true;
 	menu.Display(client, 30);
 }
 
@@ -141,12 +168,7 @@ public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, i
 		char info[32];
 		Handle cookie;
 		menu.GetItem(param2, info, sizeof(info));
-		if(StrEqual(info, "show")) {
-			maskCookieHidden &=~ clientBit(param1);
-			if((cookie = FindClientCookie(COOKIE_HIDE)) != null) {
-				SetClientCookie(param1, cookie, "0");
-			}
-		} else if(StrEqual(info, "hide")) {
+		if(StrEqual(info, "hide")) {
 			maskCookieHidden |= clientBit(param1);
 			if((cookie = FindClientCookie(COOKIE_HIDE)) != null) {
 				SetClientCookie(param1, cookie, "1");
@@ -154,6 +176,10 @@ public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, i
 		} else if(StrEqual(info, "on")) {
 			maskCookieEnabled |= clientBit(param1);
 			if((cookie = FindClientCookie(COOKIE_OFF)) != null) {
+				SetClientCookie(param1, cookie, "0");
+			}
+			maskCookieHidden &=~ clientBit(param1);
+			if((cookie = FindClientCookie(COOKIE_HIDE)) != null) {
 				SetClientCookie(param1, cookie, "0");
 			}
 		} else if(StrEqual(info, "off")) {
@@ -169,6 +195,21 @@ public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, i
 		delete menu;
 	}
 }
+
+public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
+	if (convar == null) {
+		cval_BubbleEnabled = cvar_BubbleEnabled.IntValue;
+		cval_BubbleDistance = cvar_BubbleDistance.FloatValue;
+		cval_BubbleDefaultState = cvar_BubbleDefaultState.IntValue;
+	} else if (convar == cvar_BubbleEnabled) {
+		cval_BubbleEnabled = cvar_BubbleEnabled.IntValue;
+	} else if (convar == cvar_BubbleDistance) {
+		cval_BubbleDistance = cvar_BubbleDistance.FloatValue;
+	} else if (convar == cvar_BubbleDefaultState) {
+		cval_BubbleDefaultState = cvar_BubbleDefaultState.IntValue;
+	}
+}
+
 
 /** 
  * Maintain team client masks
@@ -237,8 +278,7 @@ static bool traceCanSee(int client, int target, float maxdistsquared) {
 	return result;
 }
 static void updateClientMasks() {
-	float mdist = cvar_BubbleDistance.FloatValue;
-	mdist*=mdist;
+	float mdist = cval_BubbleDistance*cval_BubbleDistance;
 	for (int i=1; i<TF2_MAXPLAYERS; i++) {
 		for (int j=i+1; j<=TF2_MAXPLAYERS; j++) {
 			
@@ -305,7 +345,7 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 }
 
 public Action commandSay(int client, const char[] command, int argc) {
-	if (cvar_BubbleEnabled.IntValue != 1 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
+	if (cval_BubbleEnabled != 1 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
@@ -316,7 +356,7 @@ public Action commandSay(int client, const char[] command, int argc) {
 }
 
 public Action commandSayTeam(int client, const char[] command, int argc) {
-	if (cvar_BubbleEnabled.IntValue == 0 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
+	if (cval_BubbleEnabled == 0 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);

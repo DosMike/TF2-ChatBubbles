@@ -13,6 +13,10 @@ for only teamsay (2) or disable it temporarily (0).
 The convar `sm_chatbubble_distance` defines the maximum distance in hammer units
 between players that still triggers chat bubbles.
 
+If you don't want chat bubbles to be shown by default I recommend you set
+`sm_chatbubble_default` to hidden / send only (2). If you only want chat bubbles to be sent
+by players that explicitly turn the !settings on, you can also complete disable it by default (0).
+
 Requirements
 -----
 - smlib
