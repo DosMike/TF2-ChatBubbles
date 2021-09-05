@@ -12,7 +12,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w33b"
+#define PLUGIN_VERSION "21w35a"
 
 #define TF2_MAXPLAYERS 32
 
@@ -113,7 +113,7 @@ public void OnClientCookiesCached(int client) {
 			value = cval_BubbleDefaultState == 2;
 			SetClientCookie(client, cookie, value?"1":"0");
 		} else value = !!StringToInt(buffer);
-			
+		
 		if (value)
 			maskCookieHidden |= clientBit(client);
 		else
@@ -130,9 +130,9 @@ public void OnClientCookiesCached(int client) {
 		} else value = !!StringToInt(buffer);
 		
 		if (value)
-			maskCookieEnabled |= clientBit(client);
-		else
 			maskCookieEnabled &=~ clientBit(client);
+		else
+			maskCookieEnabled |= clientBit(client);
 	} else { //cookie is missing
 		maskCookieEnabled |= clientBit(client);
 	}
