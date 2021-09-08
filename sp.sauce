@@ -1,0 +1,5 @@
+sourcemod 1.10
+clone https://github.com/bcserv/smlib.git transitional_syntax into git/smlib
+copy spcache/git/smlib/scripting : spcache/addons/sourcemod/scripting replace skip
+dependency forums https://forums.alliedmods.net/showthread.php?t=333870
+spcomp -O2 -o chatbubbles.smx chatbubbles.sp
