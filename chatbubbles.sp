@@ -12,12 +12,11 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w35a"
+#define PLUGIN_VERSION "21w38a"
 
 #define TF2_MAXPLAYERS 32
 
-#define COOKIE_HIDE "clientChatbubbleHide"
-#define COOKIE_OFF "clientChatbubbleIgnore"
+#define COOKIE_STATE "clientChatbubbleState"
 
 public Plugin myinfo = {
 	name = "[TF2] Chat Bubbles",
@@ -35,6 +34,7 @@ int maskCanSee[TF2_MAXPLAYERS+1];
 int maskCookieEnabled;
 int maskCookieHidden;
 
+Cookie cookie_ClientSetting;
 ConVar cvar_BubbleDistance;
 ConVar cvar_BubbleEnabled;
 ConVar cvar_BubbleDefaultState;
@@ -56,8 +56,7 @@ public void OnPluginStart() {
 	cvar_BubbleDefaultState.AddChangeHook(OnConVarChanged);
 	OnConVarChanged(null,"","");
 	
-	RegClientCookie(COOKIE_HIDE, "Set whether you can see chat bubbles or not", CookieAccess_Public);
-	RegClientCookie(COOKIE_OFF, "Completely disables chat bubbles for you", CookieAccess_Public);
+	cookie_ClientSetting = new Cookie(COOKIE_STATE, "Chat bubbles visibility: 0=off,1=on,2=hidden", CookieAccess_Private);
 	SetCookieMenuItem(cookieMenuHandler, 0, "Chat Bubbles");
 	
 	HookEvent("player_spawn", Event_PlayerSpawn);
@@ -104,37 +103,36 @@ public Action Timer_PlayerTracing(Handle timer) {
 }
 
 public void OnClientCookiesCached(int client) {
-	Handle cookie;
 	char buffer[2];
-	if ((cookie=FindClientCookie(COOKIE_HIDE)) != INVALID_HANDLE) {
-		GetClientCookie(client, cookie, buffer, sizeof(buffer));
-		bool value;
-		if (buffer[0]==0) { // no value set yet, check and set default
-			value = cval_BubbleDefaultState == 2;
-			SetClientCookie(client, cookie, value?"1":"0");
-		} else value = !!StringToInt(buffer);
-		
-		if (value)
-			maskCookieHidden |= clientBit(client);
-		else
-			maskCookieHidden &=~ clientBit(client);
-	} else { //cookie is missing
-		maskCookieHidden &=~ clientBit(client);
+	int sstate;
+	sstate = cval_BubbleDefaultState;
+	if (cookie_ClientSetting != null) {
+		GetClientCookie(client, cookie_ClientSetting, buffer, sizeof(buffer));
+		if (buffer[0]==0) { // no value set yet, set default
+			if (cval_BubbleDefaultState==0) //default disabled, sad
+				SetClientCookie(client, cookie_ClientSetting, "0");
+			else if (cval_BubbleDefaultState==2) //default hidden
+				SetClientCookie(client, cookie_ClientSetting, "2");
+			else //default enabled
+				SetClientCookie(client, cookie_ClientSetting, "1");
+		} else {
+			sstate = StringToInt(buffer);
+		}
 	}
-	if ((cookie=FindClientCookie(COOKIE_OFF)) != INVALID_HANDLE) {
-		GetClientCookie(client, cookie, buffer, sizeof(buffer));
-		bool value;
-		if (buffer[0]==0) { // no value set yet, check and set default
-			value = cval_BubbleDefaultState != 0;
-			SetClientCookie(client, cookie, value?"1":"0");
-		} else value = !!StringToInt(buffer);
-		
-		if (value)
-			maskCookieEnabled &=~ clientBit(client);
-		else
-			maskCookieEnabled |= clientBit(client);
-	} else { //cookie is missing
-		maskCookieEnabled |= clientBit(client);
+	int mebit = clientBit(client);
+	switch (sstate) {
+		case 0: { //disable: hidden & not enabled
+			maskCookieHidden |= mebit;
+			maskCookieEnabled &=~ mebit;
+		}
+		case 2: { //hidden: hidden & enabled
+			maskCookieHidden |= mebit;
+			maskCookieEnabled |= mebit;
+		}
+		default: { //enabled: not hidden & enabled
+			maskCookieHidden &=~ mebit;
+			maskCookieEnabled |= mebit;
+		}
 	}
 }
 
@@ -166,26 +164,24 @@ void showSettingsMenu(int client) {
 public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, int param2) {
 	if(action == MenuAction_Select) {
 		char info[32];
-		Handle cookie;
 		menu.GetItem(param2, info, sizeof(info));
 		if(StrEqual(info, "hide")) {
+			maskCookieEnabled |= clientBit(param1);
 			maskCookieHidden |= clientBit(param1);
-			if((cookie = FindClientCookie(COOKIE_HIDE)) != null) {
-				SetClientCookie(param1, cookie, "1");
+			if(cookie_ClientSetting != null) {
+				SetClientCookie(param1, cookie_ClientSetting, "2");
 			}
 		} else if(StrEqual(info, "on")) {
 			maskCookieEnabled |= clientBit(param1);
-			if((cookie = FindClientCookie(COOKIE_OFF)) != null) {
-				SetClientCookie(param1, cookie, "0");
-			}
 			maskCookieHidden &=~ clientBit(param1);
-			if((cookie = FindClientCookie(COOKIE_HIDE)) != null) {
-				SetClientCookie(param1, cookie, "0");
+			if(cookie_ClientSetting != null) {
+				SetClientCookie(param1, cookie_ClientSetting, "1");
 			}
 		} else if(StrEqual(info, "off")) {
 			maskCookieEnabled &=~ clientBit(param1);
-			if((cookie = FindClientCookie(COOKIE_OFF)) != null) {
-				SetClientCookie(param1, cookie, "1");
+			maskCookieHidden |= clientBit(param1);
+			if(cookie_ClientSetting != null) {
+				SetClientCookie(param1, cookie_ClientSetting, "0");
 			}
 		}
 		showSettingsMenu(param1);
