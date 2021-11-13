@@ -2,4 +2,6 @@ sourcemod 1.10
 clone https://github.com/bcserv/smlib.git transitional_syntax into git/smlib
 copy spcache/git/smlib/scripting : spcache/addons/sourcemod/scripting replace skip
 dependency forums https://forums.alliedmods.net/showthread.php?t=333870
+// this is the most recent version of simple chat processor i could find
+dependency forums patch https://forums.alliedmods.net/showpost.php?p=2629088
 spcomp -O2 -o chatbubbles.smx chatbubbles.sp
