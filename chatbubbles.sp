@@ -7,12 +7,16 @@
 #include <smlib>
 #include <clientprefs>
 
+#undef REQUIRE_PLUGIN
+#tryinclude <scp>
+#define REQUIRE_PLUGIN
+
 #include "tf2hudmsg.inc"
 
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w38a"
+#define PLUGIN_VERSION "21w45a"
 
 #define TF2_MAXPLAYERS 32
 
@@ -26,6 +30,9 @@ public Plugin myinfo = {
 	url = "N/A"
 }
 
+#if defined _scp_included
+bool useSCP;
+#endif
 
 CursorAnnotation clientBubble[TF2_MAXPLAYERS+1];
 int maskRED=0,maskBLU=0,maskAlive=0;
@@ -62,13 +69,13 @@ public void OnPluginStart() {
 	HookEvent("player_spawn", Event_PlayerSpawn);
 	HookEvent("player_death", Event_PlayerDeath);
 	
-	int team;
+	TFTeam team;
 	for (int i=1; i<=TF2_MAXPLAYERS; i++) {
 		clientBubble[i] = CursorAnnotation();
 		clientBubble[i].SetLifetime(5.0);
 		if (Client_IsIngame(i) && !IsFakeClient(i)) {
 			if (IsPlayerAlive(i)) maskAlive |= clientBit(i);
-			team = GetClientTeam(i);
+			team = TF2_GetClientTeam(i);
 			if (team == TFTeam_Red) maskRED |= clientBit(i);
 			else if (team == TFTeam_Blue) maskBLU |= clientBit(i);
 			if(AreClientCookiesCached(i)) {
@@ -88,6 +95,18 @@ public void OnPluginEnd() {
 	}
 	OnMapEnd();
 }
+
+#if defined _scp_included
+public void OnLibraryAdded(const char[] name) {
+	if (StrEqual(name, "scp")) useSCP = true;
+}
+public void OnLibraryRemoved(const char[] name) {
+	if (StrEqual(name, "scp")) useSCP = false;
+}
+public void OnAllPluginsLoaded() {
+	useSCP = LibraryExists("scp");
+}
+#endif
 
 public void OnMapStart() {
 	if (playerTraceTimer == INVALID_HANDLE)
@@ -298,7 +317,25 @@ static void updateClientMasks() {
 	}
 }
 
-static void bubble(int client, const char[] message, int visibility) {
+static void bubble(int client, const char[] original, int visibility) {
+	//word wrap 50
+	int len=strlen(original)+1;
+	char[] message = new char [len];
+	strcopy(message, len, original);
+	TrimString(message);
+	while (ReplaceString(message, len, "  ", " ")) {/* collapse all multi-spaces */}
+	//mark is the last space encountered to turn into a linebreak
+	//accu is the amount of characters in the currently last line
+	for (int i,mark,accu; i<len; i++) {
+		if (message[i]==0)break;
+		if (message[i]==' ')mark=i;
+		else if (++accu >= 50 && mark) {
+			message[mark] = '\n';
+			accu = (i-mark);
+			mark = 0;
+		}
+	}
+	//diplay message
 	CursorAnnotation ca = forClient(client);
 	ca.VisibilityBitmask = visibility;
 	ca.ParentEntity = client;
@@ -341,6 +378,9 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 }
 
 public Action commandSay(int client, const char[] command, int argc) {
+#if defined _scp_included
+	if (useSCP) return Plugin_Continue;
+#endif
 	if (cval_BubbleEnabled != 1 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
@@ -352,6 +392,9 @@ public Action commandSay(int client, const char[] command, int argc) {
 }
 
 public Action commandSayTeam(int client, const char[] command, int argc) {
+#if defined _scp_included
+	if (useSCP) return Plugin_Continue;
+#endif
 	if (cval_BubbleEnabled == 0 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
@@ -361,3 +404,26 @@ public Action commandSayTeam(int client, const char[] command, int argc) {
 	handleSay(client, message, true);
 	return Plugin_Continue;
 }
+
+#if defined _scp_included
+public void OnChatMessage_Post(int author, ArrayList recipients, const char[] name, const char[] message) {
+	if (!useSCP) return;
+	
+	TFTeam team = clientBubbleTeam(author, message);
+	if (team <= TFTeam_Spectator) return;
+	
+	//basic targets: alive, has them fully enabled, can see the source, not the source
+	int targets = maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[author] & ~clientBit(author);
+	
+	//check if player is invisible
+	if (TF2_IsPlayerInCondition(author, TFCond_Cloaked)) return;
+	
+	//for scp we can't use they team bypass for disguised spies!
+	int scp_rec; //accumulate targets into bit string
+	for (int i; i<recipients.Length; i++) {
+		scp_rec |= clientBit(recipients.Get(i));
+	}
+	
+	bubble(author, message, targets & scp_rec);
+}
+#endif
