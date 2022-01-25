@@ -10,6 +10,7 @@
 
 #undef REQUIRE_PLUGIN
 #tryinclude <scp>
+#tryinclude <chat-processor>
 #tryinclude <CiderChatProcessor>
 #define REQUIRE_PLUGIN
 
