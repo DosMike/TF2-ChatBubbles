@@ -10,6 +10,7 @@
 
 #undef REQUIRE_PLUGIN
 #tryinclude <scp>
+#tryinclude <CiderChatProcessor>
 #define REQUIRE_PLUGIN
 
 #include "tf2hudmsg.inc"
@@ -31,8 +32,13 @@ public Plugin myinfo = {
 	url = "N/A"
 }
 
-#if defined _scp_included
-bool useSCP;
+#if defined _scp_included || defined _CiderChatProcessor_included || defined _chat_processor_included
+#define _use_chatprocessor
+// this is important if compiled for multiple processors and for some reason multiple processors are loaded on the server
+#define CHAT_PROCESSOR_SCPREDUX (1<<0)
+#define CHAT_PROCESSOR_CIDER (1<<1)
+#define CHAT_PROCESSOR_DRIXEVEL (1<<2)
+int chatProcessorLoaded;
 #endif
 
 CursorAnnotation clientBubble[TF2_MAXPLAYERS+1];
@@ -101,15 +107,22 @@ public void OnPluginEnd() {
 	OnMapEnd();
 }
 
-#if defined _scp_included
+#if defined _use_chatprocessor
 public void OnLibraryAdded(const char[] name) {
-	if (StrEqual(name, "scp")) useSCP = true;
+	if (StrEqual(name, "scp")) chatProcessorLoaded |= CHAT_PROCESSOR_SCPREDUX;
+	if (StrEqual(name, "CiderChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_CIDER;
+	if (StrEqual(name, "chat-processor")) chatProcessorLoaded |= CHAT_PROCESSOR_DRIXEVEL;
 }
 public void OnLibraryRemoved(const char[] name) {
-	if (StrEqual(name, "scp")) useSCP = false;
+	if (StrEqual(name, "scp")) chatProcessorLoaded &=~ CHAT_PROCESSOR_SCPREDUX;
+	if (StrEqual(name, "CiderChatProcessor")) chatProcessorLoaded &=~ CHAT_PROCESSOR_CIDER;
+	if (StrEqual(name, "chat-processor")) chatProcessorLoaded &=~ CHAT_PROCESSOR_DRIXEVEL;
 }
 public void OnAllPluginsLoaded() {
-	useSCP = LibraryExists("scp");
+	chatProcessorLoaded = 0;
+	if (LibraryExists("scp")) chatProcessorLoaded |= CHAT_PROCESSOR_SCPREDUX;
+	if (LibraryExists("CiderChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_CIDER;
+	if (LibraryExists("chat-processor")) chatProcessorLoaded |= CHAT_PROCESSOR_DRIXEVEL;
 }
 #endif
 
@@ -409,8 +422,8 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 }
 
 public Action commandSay(int client, const char[] command, int argc) {
-#if defined _scp_included
-	if (useSCP) return Plugin_Continue;
+#if defined _use_chatprocessor
+	if (chatProcessorLoaded) return Plugin_Continue;
 #endif
 	if (cval_BubbleEnabled != 1 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
@@ -423,8 +436,8 @@ public Action commandSay(int client, const char[] command, int argc) {
 }
 
 public Action commandSayTeam(int client, const char[] command, int argc) {
-#if defined _scp_included
-	if (useSCP) return Plugin_Continue;
+#if defined _use_chatprocessor
+	if (chatProcessorLoaded) return Plugin_Continue;
 #endif
 	if (cval_BubbleEnabled == 0 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
@@ -436,10 +449,8 @@ public Action commandSayTeam(int client, const char[] command, int argc) {
 	return Plugin_Continue;
 }
 
-#if defined _scp_included
-public void OnChatMessage_Post(int author, ArrayList recipients, const char[] name, const char[] message) {
-	if (!useSCP) return;
-	
+#if defined _use_chatprocessor
+static void anycp_OnChatPost(int author, ArrayList recipients, const char[] message) {
 	TFTeam team = clientBubbleTeam(author, message);
 	if (team <= TFTeam_Spectator) return;
 	
@@ -459,5 +470,26 @@ public void OnChatMessage_Post(int author, ArrayList recipients, const char[] na
 	strcopy(smessage, sizeof(smessage), message);
 	EscapeVGUILocalization(smessage, sizeof(smessage));
 	bubble(author, smessage, targets & scp_rec);
+}
+#endif
+
+#if defined _scp_included
+public void OnChatMessage_Post(int author, ArrayList recipients, const char[] name, const char[] message) {
+	if (chatProcessorLoaded != CHAT_PROCESSOR_SCPREDUX) return;
+	anycp_OnChatPost(author, recipients, message);
+}
+#endif
+
+#if defined _CiderChatProcessor_included
+public void CCP_OnChatMessagePost(int author, ArrayList recipients, const char[] flagstring, const char[] formatstring, const char[] name, const char[] message) {
+	if (chatProcessorLoaded != CHAT_PROCESSOR_CIDER) return;
+	anycp_OnChatPost(author, recipients, message);
+}
+#endif
+
+#if defined _chat_processor_included
+public void CP_OnChatMessagePost(int author, ArrayList recipients, const char[] flagstring, const char[] formatstring, const char[] name, const char[] message, bool processcolors, bool removecolors) {
+	if (chatProcessorLoaded != CHAT_PROCESSOR_DRIXEVEL) return;
+	anycp_OnChatPost(author, recipients, message);
 }
 #endif
