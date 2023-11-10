@@ -4,7 +4,6 @@
 #include <basecomm>
 #include <tf2>
 #include <tf2_stocks>
-#include <smlib>
 #include <clientprefs>
 #include <regex>
 
@@ -19,9 +18,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "22w04a"
-
-#define TF2_MAXPLAYERS 32
+#define PLUGIN_VERSION "23w45a"
 
 #define COOKIE_STATE "clientChatbubbleState"
 
@@ -42,12 +39,119 @@ public Plugin myinfo = {
 int chatProcessorLoaded;
 #endif
 
-CursorAnnotation clientBubble[TF2_MAXPLAYERS+1];
-int maskRED=0,maskBLU=0,maskAlive=0;
-int maskCanSee[TF2_MAXPLAYERS+1];
+/** allow to use a bitflag-like for the extended 100 players on tf2 */
+enum struct PlayerBits {
+	int partition[4]; // up to 128 players
+	
+	void Or(int index) {
+		this.partition[index/32] |= (1<<(index%32));
+	}
+	void OrBits(PlayerBits other) {
+		this.partition[0] |= other.partition[0];
+		this.partition[1] |= other.partition[1];
+		this.partition[2] |= other.partition[2];
+		this.partition[3] |= other.partition[3];
+	}
+	void OrNot(int index) {
+		this.partition[index/32] |=~ (1<<(index%32));
+	}
+	void OrNotBits(PlayerBits other) {
+		this.partition[0] |=~ other.partition[0];
+		this.partition[1] |=~ other.partition[1];
+		this.partition[2] |=~ other.partition[2];
+		this.partition[3] |=~ other.partition[3];
+	}
+	void And(int index) {
+		this.partition[index/32] &= (1<<(index%32));
+	}
+	void AndBits(PlayerBits other) {
+		this.partition[0] &= other.partition[0];
+		this.partition[1] &= other.partition[1];
+		this.partition[2] &= other.partition[2];
+		this.partition[3] &= other.partition[3];
+	}
+	void AndNot(int index) {
+		this.partition[index/32] &=~ (1<<(index%32));
+	}
+	void AndNotBits(PlayerBits other) {
+		this.partition[0] &=~ other.partition[0];
+		this.partition[1] &=~ other.partition[1];
+		this.partition[2] &=~ other.partition[2];
+		this.partition[3] &=~ other.partition[3];
+	}
+	bool Xor(int index) {
+		int part = index/32;
+		int mask = (1<<(index%32));
+		this.partition[part] ^= mask;
+		return (this.partition[part] & mask) != 0;
+	}
+	void XorBits(PlayerBits other) {
+		this.partition[0] ^= other.partition[0];
+		this.partition[1] ^= other.partition[1];
+		this.partition[2] ^= other.partition[2];
+		this.partition[3] ^= other.partition[3];
+	}
+	void Not() {
+		this.partition[0] =~ this.partition[0];
+		this.partition[1] =~ this.partition[1];
+		this.partition[2] =~ this.partition[2];
+		this.partition[3] =~ this.partition[3];
+	}
+	void Set(int index, bool active) {
+		if (active) this.Or(index);
+		else this.AndNot(index);
+	}
+	bool Get(int index) {
+		return (this.partition[index/32] & (1<<(index%32))) != 0;
+	}
+	
+	void SetTeam(int team) {
+		for (int client=1; client <= MaxClients; client++)
+			if (IsClientInGame(client) && GetClientTeam(client) == team)
+				this.Or(client);
+	}
+	void SetAlive() {
+		for (int client=1; client <= MaxClients; client++)
+			if (IsClientInGame(client) && IsPlayerAlive(client))
+				this.Or(client);
+	}
+	int ToArray(int[] player, int maxplayers) {
+		int i;
+		for (int client=1; client <= MaxClients && i < maxplayers; client++) {
+			if (this.Get(client)) { 
+				player[i] = client;
+				i++;
+			}
+		}
+		return i;
+	}
+	int ToArrayList(ArrayList list) {
+		for (int client=1; client <= MaxClients; client++) {
+			if (this.Get(client)) { 
+				list.Push(client);
+			}
+		}
+		return list.Length;
+	}
+	bool Any() {
+		return this.partition[0] || this.partition[1] || this.partition[2] || this.partition[3];
+	}
+	int Count() {
+		int count;
+		for (int i=0; i<32; i++) {
+			count += ((this.partition[0] & (1<<i)) ? 1 : 0) +
+					((this.partition[1] & (1<<i)) ? 1 : 0) +
+					((this.partition[2] & (1<<i)) ? 1 : 0) +
+					((this.partition[3] & (1<<i)) ? 1 : 0);
+		}
+		return count;
+	}
+}
 
-int maskCookieEnabled;
-int maskCookieHidden;
+PlayerBits teamRedBits, teamBlueBits, aliveBits;
+PlayerBits canSeeBits[MAXPLAYERS+1];
+PlayerBits cookieEnabledBits;
+PlayerBits cookieHiddenBits;
 
 Cookie cookie_ClientSetting;
 ConVar cvar_BubbleDistance;
@@ -81,30 +185,21 @@ public void OnPluginStart() {
 	// pattern to find clusters of 50 characters with a finishing cluster of up to 50
 	wordBreakPattern = new Regex("[^\\s\\n]{50,100}", PCRE_UTF8|PCRE_MULTILINE);
 	
-	TFTeam team;
-	for (int i=1; i<=TF2_MAXPLAYERS; i++) {
-		clientBubble[i] = CursorAnnotation();
-		clientBubble[i].SetLifetime(5.0);
-		if (Client_IsIngame(i) && !IsFakeClient(i)) {
-			if (IsPlayerAlive(i)) maskAlive |= clientBit(i);
-			team = TF2_GetClientTeam(i);
-			if (team == TFTeam_Red) maskRED |= clientBit(i);
-			else if (team == TFTeam_Blue) maskBLU |= clientBit(i);
+	aliveBits.SetAlive();
+	teamRedBits.SetTeam(view_as<int>(TFTeam_Red));
+	teamBlueBits.SetTeam(view_as<int>(TFTeam_Blue));
+	for (int i=1; i<=MaxClients; i++) {
+		if (IsClientInGame(i) && !IsFakeClient(i)) {
 			if(AreClientCookiesCached(i)) {
 				OnClientCookiesCached(i);
 			}
 		}
 	}
 	
-	OnMapStart();
-	
 	PrintToChatAll("[Chat Bubbles] Version %s loaded!", PLUGIN_VERSION);
 }
 
 public void OnPluginEnd() {
-	for (int i=1; i<=TF2_MAXPLAYERS; i++) {
-		clientBubble[i].Close();
-	}
 	OnMapEnd();
 }
 
@@ -138,6 +233,7 @@ public void OnMapEnd() {
 
 public Action Timer_PlayerTracing(Handle timer) {
 	updateClientMasks();
+	return Plugin_Continue;
 }
 
 public void OnClientCookiesCached(int client) {
@@ -157,21 +253,8 @@ public void OnClientCookiesCached(int client) {
 			sstate = StringToInt(buffer);
 		}
 	}
-	int mebit = clientBit(client);
-	switch (sstate) {
-		case 0: { //disable: hidden & not enabled
-			maskCookieHidden |= mebit;
-			maskCookieEnabled &=~ mebit;
-		}
-		case 2: { //hidden: hidden & enabled
-			maskCookieHidden |= mebit;
-			maskCookieEnabled |= mebit;
-		}
-		default: { //enabled: not hidden & enabled
-			maskCookieHidden &=~ mebit;
-			maskCookieEnabled |= mebit;
-		}
-	}
+	cookieHiddenBits.Set(client, sstate != 1);
+	cookieEnabledBits.Set(client, sstate != 0);
 }
 
 public void cookieMenuHandler(int client, CookieMenuAction action, any info, char[] buffer, int maxlen) {
@@ -182,8 +265,8 @@ public void cookieMenuHandler(int client, CookieMenuAction action, any info, cha
 
 void showSettingsMenu(int client) {
 	Menu menu = new Menu(settingsMenuActionHandler);
-	if (!!(maskCookieEnabled & clientBit(client))) {
-		if (!!(maskCookieHidden & clientBit(client))) {
+	if (cookieEnabledBits.Get(client)) {
+		if (cookieHiddenBits.Get(client)) {
 			menu.SetTitle("Chat Bubbles\n \nYou send chat bubbles but can't see others\n ");
 			menu.AddItem("off", "Hidden");
 		} else {
@@ -204,20 +287,20 @@ public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, i
 		char info[32];
 		menu.GetItem(param2, info, sizeof(info));
 		if(StrEqual(info, "hide")) {
-			maskCookieEnabled |= clientBit(param1);
-			maskCookieHidden |= clientBit(param1);
+			cookieEnabledBits.Or(param1);
+			cookieHiddenBits.Or(param1);
 			if(cookie_ClientSetting != null) {
 				SetClientCookie(param1, cookie_ClientSetting, "2");
 			}
 		} else if(StrEqual(info, "on")) {
-			maskCookieEnabled |= clientBit(param1);
-			maskCookieHidden &=~ clientBit(param1);
+			cookieEnabledBits.Or(param1);
+			cookieHiddenBits.AndNot(param1);
 			if(cookie_ClientSetting != null) {
 				SetClientCookie(param1, cookie_ClientSetting, "1");
 			}
 		} else if(StrEqual(info, "off")) {
-			maskCookieEnabled &=~ clientBit(param1);
-			maskCookieHidden |= clientBit(param1);
+			cookieEnabledBits.AndNot(param1);
+			cookieHiddenBits.Or(param1);
 			if(cookie_ClientSetting != null) {
 				SetClientCookie(param1, cookie_ClientSetting, "0");
 			}
@@ -228,6 +311,7 @@ public int settingsMenuActionHandler(Menu menu, MenuAction action, int param1, i
 	} else if(action == MenuAction_End) {
 		delete menu;
 	}
+	return 0;
 }
 
 public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
@@ -253,17 +337,16 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
 	TFTeam team = view_as<TFTeam>( event.GetInt("team") );
 	if (IsFakeClient(client)) return;
 	
-	int bit = clientBit(client);
 	switch (team) {
 		case TFTeam_Red: {
-			maskRED |= bit;
-			maskBLU &=~ bit;
-			maskAlive |= bit;
+			teamRedBits.Or(client);
+			teamBlueBits.AndNot(client);
+			aliveBits.Or(client);
 		}
 		case TFTeam_Blue: {
-			maskBLU |= bit;
-			maskRED &=~ bit;
-			maskAlive |= bit;
+			teamRedBits.AndNot(client);
+			teamBlueBits.Or(client);
+			aliveBits.Or(client);
 		}
 	}
 }
@@ -271,35 +354,22 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
 public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId( event.GetInt("userid") );
 	
-	maskAlive &=~ clientBit(client);
-}
-
-static int clientBit(int client) {
-	if (0 < client <= TF2_MAXPLAYERS)
-		return 1<<client;
-	return 0;
-}
-
-static CursorAnnotation forClient(int client) {
-	if (!Client_IsIngame(client))
-		ThrowError("Invalid client index or client not in game (%i)", client);
-	return clientBubble[client];
+	aliveBits.AndNot(client);
 }
 
 public bool canSeeTraceFilter(int entity, int contentsMask, any data) {
 	return entity == data;
 }
 static bool traceCanSee(int client, int target, float maxdistsquared) {
-	if (!Client_IsValid(client) || !Client_IsValid(target)) return false;
-	if (!Client_IsIngame(client) || !Client_IsIngame(target) ||
+	if (!IsClientInGame(client) || !IsClientInGame(target) ||
 		!IsPlayerAlive(client) || !IsPlayerAlive(target) ||
 		IsFakeClient(client) || IsFakeClient(target)) {
 		return false;
 	}
 	
 	float posClient[3], posTarget[3], mins[3]={-14.0,0.0,-14.0}, maxs[3]={14.0,72.0,14.0};
-	Entity_GetAbsOrigin(client, posClient);
-	Entity_GetAbsOrigin(target, posTarget);
+	GetClientAbsOrigin(client, posClient);
+	GetClientAbsOrigin(target, posTarget);
 	float distance = GetVectorDistance(posClient, posTarget, true);
 	if (distance > maxdistsquared) {
 		return false;
@@ -313,30 +383,22 @@ static bool traceCanSee(int client, int target, float maxdistsquared) {
 }
 static void updateClientMasks() {
 	float mdist = cval_BubbleDistance*cval_BubbleDistance;
-	for (int i=1; i<TF2_MAXPLAYERS; i++) {
-		for (int j=i+1; j<=TF2_MAXPLAYERS; j++) {
+	for (int i=1; i<=MaxClients; i++) {
+		for (int j=i+1; j<=MaxClients; j++) {
 			
 			bool canSee = traceCanSee(i,j, mdist);
 			
 			//perspecive i: i has not muted j and they can see each other
-			if (canSee && !IsClientMuted(i,j)) {
-				maskCanSee[i] |= clientBit(j);
-			} else { //i muted j or los is broken
-				maskCanSee[i] &=~ clientBit(j);
-			}
+			canSeeBits[i].Set(j, canSee && !IsClientMuted(i,j));
 			
 			//perspecive j: j has not muted i and they can see each other
-			if (canSee && !IsClientMuted(j,i)) {
-				maskCanSee[j] |= clientBit(i);
-			} else { //j muted i or los is broken
-				maskCanSee[j] &=~ clientBit(i);
-			}
+			canSeeBits[j].Set(i, canSee && !IsClientMuted(j,i));
 			
 		}
 	}
 }
 
-static void bubble(int client, const char[] original, int visibility) {
+static void bubble(int client, const char[] original, PlayerBits visibility) {
 	//word wrap 50
 	char message[MAX_ANNOTATION_LENGTH];
 	strcopy(message, sizeof(message), original);
@@ -381,15 +443,17 @@ static void bubble(int client, const char[] original, int visibility) {
 		message[MAX_ANNOTATION_LENGTH-1] = 0;
 	}
 	//diplay message
-	CursorAnnotation ca = forClient(client);
-	ca.VisibilityBitmask = visibility;
+	CursorAnnotation ca = CursorAnnotation();
+	for (int i=1; i<=MaxClients; i++) 
+		ca.SetVisibilityFor(i, visibility.Get(i));
 	ca.ParentEntity = client;
-	float pos[3], off[3]={0.0,72.0,0.0};
-	Entity_GetAbsOrigin(client, pos);
-	AddVectors(pos,off,pos);
+	float pos[3];
+	GetClientAbsOrigin(client, pos);
+	pos[2]+=72.0;
 	ca.SetPosition(pos);
 	ca.SetText(message);
 	ca.SetLifetime(5.0);
+	ca.AutoClose = true;
 	ca.Update();
 }
 
@@ -407,17 +471,25 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 	TFTeam team = clientBubbleTeam(client, message);
 	if (team <= TFTeam_Spectator) return;
 	
-	//basic targets: alive, has them fully enabled, can see the source, not the source
-	int targets = maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[client] & ~clientBit(client);
-	
 	//check if player is invisible
 	if (TF2_IsPlayerInCondition(client, TFCond_Cloaked)) return;
+	
+	PlayerBits targets;
 	
 	//if the player is disguised, play as say to not give away the actual team
 	if (teamSay && !(TF2_IsPlayerInCondition(client, TFCond_Disguising)|TF2_IsPlayerInCondition(client, TFCond_Disguised)|TF2_IsPlayerInCondition(client, TFCond_DisguisedAsDispenser))) {
 		//otherwise we mask the team for team say
-		targets &= (team == TFTeam_Red) ? maskRED : maskBLU;
+		targets.OrBits((team==TFTeam_Red) ? teamRedBits : teamBlueBits);
+	} else {
+		targets.Not(); //default to all
 	}
+	
+	//basic targets: alive, has them fully enabled, can see the source, not the source
+	targets.AndBits(aliveBits);
+	targets.AndNotBits(cookieHiddenBits);
+	targets.AndBits(cookieEnabledBits);
+	targets.AndBits(canSeeBits[client]);
+	targets.Or(client);
 	
 	bubble(client, message, targets);
 }
@@ -426,7 +498,7 @@ public Action commandSay(int client, const char[] command, int argc) {
 #if defined _use_chatprocessor
 	if (chatProcessorLoaded) return Plugin_Continue;
 #endif
-	if (cval_BubbleEnabled != 1 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
+	if (cval_BubbleEnabled != 1 || !cookieEnabledBits.Get(client) ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
@@ -440,7 +512,7 @@ public Action commandSayTeam(int client, const char[] command, int argc) {
 #if defined _use_chatprocessor
 	if (chatProcessorLoaded) return Plugin_Continue;
 #endif
-	if (cval_BubbleEnabled == 0 || (maskCookieEnabled & clientBit(client))==0 ) return Plugin_Continue;
+	if (cval_BubbleEnabled == 0 || !cookieEnabledBits.Get(client) ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
 	GetCmdArgString(message, sizeof(message));
 	StripQuotes(message);
@@ -455,22 +527,28 @@ static void anycp_OnChatPost(int author, ArrayList recipients, const char[] mess
 	TFTeam team = clientBubbleTeam(author, message);
 	if (team <= TFTeam_Spectator) return;
 	
-	//basic targets: alive, has them fully enabled, can see the source, not the source
-	int targets = maskAlive & (~maskCookieHidden) & maskCookieEnabled & maskCanSee[author] & ~clientBit(author);
-	
 	//check if player is invisible
 	if (TF2_IsPlayerInCondition(author, TFCond_Cloaked)) return;
 	
+	PlayerBits targets;
+	
 	//for scp we can't use they team bypass for disguised spies!
-	int scp_rec; //accumulate targets into bit string
+	//accumulate targets into bit string
 	for (int i; i<recipients.Length; i++) {
-		scp_rec |= clientBit(recipients.Get(i));
+		targets.Or(recipients.Get(i));
 	}
+	
+	//basic targets: alive, has them fully enabled, can see the source, not the source
+	targets.AndBits(aliveBits);
+	targets.AndNotBits(cookieHiddenBits);
+	targets.AndBits(cookieEnabledBits);
+	targets.AndBits(canSeeBits[author]);
+	targets.AndNot(author);
 	
 	char smessage[MAX_ANNOTATION_LENGTH];
 	strcopy(smessage, sizeof(smessage), message);
 	EscapeVGUILocalization(smessage, sizeof(smessage));
-	bubble(author, smessage, targets & scp_rec);
+	bubble(author, smessage, targets);
 }
 #endif
 

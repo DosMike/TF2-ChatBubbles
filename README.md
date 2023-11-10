@@ -23,7 +23,6 @@ Using a chat processor however will break a spy check that is in place for non-c
 
 Requirements
 -----
-- [smlib](https://github.com/bcserv/smlib/tree/transitional_syntax) (Transitional Syntax)
 - [tf2hudmsg](https://github.com/DosMike/tf2hudmsg) (for managed CursorAnnotations)
 - [SCP Redux](https://forums.alliedmods.net/showthread.php?p=1820365) (Optional)
 - [ANY Chat-Processor](https://forums.alliedmods.net/showthread.php?p=2448733) (Optional)
