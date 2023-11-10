@@ -489,7 +489,7 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 	targets.AndNotBits(cookieHiddenBits);
 	targets.AndBits(cookieEnabledBits);
 	targets.AndBits(canSeeBits[client]);
-	targets.Or(client);
+	targets.AndNot(client);
 	
 	bubble(client, message, targets);
 }
