@@ -20,7 +20,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "24w41a"
+#define PLUGIN_VERSION "24w41b"
 
 #define COOKIE_STATE "clientChatbubbleState"
 
@@ -79,18 +79,12 @@ public void OnPluginStart() {
 	// pattern to find clusters of 50 characters with a finishing cluster of up to 50
 	wordBreakPattern = new Regex("[^\\s\\n]{50,100}", PCRE_UTF8|PCRE_MULTILINE);
 	
-	aliveBits.SetAlive();
-	teamRedBits.SetTeam(view_as<int>(TFTeam_Red));
-	teamBlueBits.SetTeam(view_as<int>(TFTeam_Blue));
-	for (int i=1; i<=MaxClients; i++) {
-		if (IsClientInGame(i) && !IsFakeClient(i)) {
-			if(AreClientCookiesCached(i)) {
-				OnClientCookiesCached(i);
-			}
-		}
-	}
-	
 	PrintToChatAll("[Chat Bubbles] Version %s loaded!", PLUGIN_VERSION);
+
+	if (LibraryExists("scp")) chatProcessorLoaded |= CHAT_PROCESSOR_SCPREDUX;
+	if (LibraryExists("CiderChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_CIDER;
+	if (LibraryExists("chat-processor")) chatProcessorLoaded |= CHAT_PROCESSOR_DRIXEVEL;
+	if (LibraryExists("MetaChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_MCP;
 }
 
 public void OnPluginEnd() {
@@ -142,6 +136,20 @@ public void OnAllPluginsLoaded() {
 public void OnMapStart() {
 	if (playerTraceTimer == INVALID_HANDLE)
 		playerTraceTimer = CreateTimer(0.1, Timer_PlayerTracing, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+
+	aliveBits.XorBits(aliveBits);
+	aliveBits.SetAlive();
+	teamRedBits.XorBits(teamRedBits);
+	teamRedBits.SetTeam(view_as<int>(TFTeam_Red));
+	teamBlueBits.XorBits(teamBlueBits);
+	teamBlueBits.SetTeam(view_as<int>(TFTeam_Blue));
+	for (int i=1; i<=MaxClients; i++) {
+		if (IsClientInGame(i) && !IsFakeClient(i)) {
+			if(AreClientCookiesCached(i)) {
+				OnClientCookiesCached(i);
+			}
+		}
+	}
 }
 public void OnMapEnd() {
 	KillTimer(playerTraceTimer);
@@ -172,6 +180,16 @@ public void OnClientCookiesCached(int client) {
 	}
 	cookieHiddenBits.Set(client, sstate != 1);
 	cookieEnabledBits.Set(client, sstate != 0);
+}
+
+public void OnClientDisconnect(int client)
+{
+	aliveBits.Set(client, false);
+	teamRedBits.Set(client, false);
+	teamBlueBits.Set(client, false);
+	cookieEnabledBits.Set(client, true);
+	cookieHiddenBits.Set(client, false);
+	canSeeBits[client].XorBits(canSeeBits[client]);
 }
 
 public void cookieMenuHandler(int client, CookieMenuAction action, any info, char[] buffer, int maxlen) {
@@ -278,6 +296,7 @@ public bool canSeeTraceFilter(int entity, int contentsMask, any data) {
 	return entity == data;
 }
 static bool traceCanSee(int client, int target, float maxdistsquared) {
+	if (client == target) return false;
 	if (!IsClientInGame(client) || !IsClientInGame(target) ||
 		!IsPlayerAlive(client) || !IsPlayerAlive(target) ||
 		IsFakeClient(client) || IsFakeClient(target)) {
@@ -316,6 +335,7 @@ static void updateClientMasks() {
 }
 
 static void bubble(int client, const char[] original, PlayerBits visibility) {
+	if (!visibility.Any()) return;
 	//word wrap 50
 	char message[MAX_ANNOTATION_LENGTH];
 	strcopy(message, sizeof(message), original);
@@ -450,13 +470,14 @@ static void anycp_OnChatPost(int author, ArrayList recipients, const char[] mess
 	if (TF2_IsPlayerInCondition(author, TFCond_Cloaked)) return;
 	
 	PlayerBits targets;
-	
+
 	//for scp we can't use they team bypass for disguised spies!
 	//accumulate targets into bit string
 	for (int i; i<recipients.Length; i++) {
-		targets.Or(recipients.Get(i));
+		int idx = recipients.Get(i);
+		targets.Or(idx);
 	}
-	
+
 	//basic targets: alive, has them fully enabled, can see the source, not the source
 	targets.AndBits(aliveBits);
 	targets.AndNotBits(cookieHiddenBits);
