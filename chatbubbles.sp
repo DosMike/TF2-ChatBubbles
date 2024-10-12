@@ -11,14 +11,16 @@
 #tryinclude <scp>
 #tryinclude <chat-processor>
 #tryinclude <CiderChatProcessor>
+#tryinclude <metachatprocessor>
 #define REQUIRE_PLUGIN
 
+#include "playerbits.inc"
 #include "tf2hudmsg.inc"
 
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "23w45a"
+#define PLUGIN_VERSION "24w41a"
 
 #define COOKIE_STATE "clientChatbubbleState"
 
@@ -36,117 +38,9 @@ public Plugin myinfo = {
 #define CHAT_PROCESSOR_SCPREDUX (1<<0)
 #define CHAT_PROCESSOR_CIDER (1<<1)
 #define CHAT_PROCESSOR_DRIXEVEL (1<<2)
+#define CHAT_PROCESSOR_MCP (1<<3)
 int chatProcessorLoaded;
 #endif
-
-/** allow to use a bitflag-like for the extended 100 players on tf2 */
-enum struct PlayerBits {
-	int partition[4]; // up to 128 players
-	
-	void Or(int index) {
-		this.partition[index/32] |= (1<<(index%32));
-	}
-	void OrBits(PlayerBits other) {
-		this.partition[0] |= other.partition[0];
-		this.partition[1] |= other.partition[1];
-		this.partition[2] |= other.partition[2];
-		this.partition[3] |= other.partition[3];
-	}
-	void OrNot(int index) {
-		this.partition[index/32] |=~ (1<<(index%32));
-	}
-	void OrNotBits(PlayerBits other) {
-		this.partition[0] |=~ other.partition[0];
-		this.partition[1] |=~ other.partition[1];
-		this.partition[2] |=~ other.partition[2];
-		this.partition[3] |=~ other.partition[3];
-	}
-	void And(int index) {
-		this.partition[index/32] &= (1<<(index%32));
-	}
-	void AndBits(PlayerBits other) {
-		this.partition[0] &= other.partition[0];
-		this.partition[1] &= other.partition[1];
-		this.partition[2] &= other.partition[2];
-		this.partition[3] &= other.partition[3];
-	}
-	void AndNot(int index) {
-		this.partition[index/32] &=~ (1<<(index%32));
-	}
-	void AndNotBits(PlayerBits other) {
-		this.partition[0] &=~ other.partition[0];
-		this.partition[1] &=~ other.partition[1];
-		this.partition[2] &=~ other.partition[2];
-		this.partition[3] &=~ other.partition[3];
-	}
-	bool Xor(int index) {
-		int part = index/32;
-		int mask = (1<<(index%32));
-		this.partition[part] ^= mask;
-		return (this.partition[part] & mask) != 0;
-	}
-	void XorBits(PlayerBits other) {
-		this.partition[0] ^= other.partition[0];
-		this.partition[1] ^= other.partition[1];
-		this.partition[2] ^= other.partition[2];
-		this.partition[3] ^= other.partition[3];
-	}
-	void Not() {
-		this.partition[0] =~ this.partition[0];
-		this.partition[1] =~ this.partition[1];
-		this.partition[2] =~ this.partition[2];
-		this.partition[3] =~ this.partition[3];
-	}
-	void Set(int index, bool active) {
-		if (active) this.Or(index);
-		else this.AndNot(index);
-	}
-	bool Get(int index) {
-		return (this.partition[index/32] & (1<<(index%32))) != 0;
-	}
-	
-	void SetTeam(int team) {
-		for (int client=1; client <= MaxClients; client++)
-			if (IsClientInGame(client) && GetClientTeam(client) == team)
-				this.Or(client);
-	}
-	void SetAlive() {
-		for (int client=1; client <= MaxClients; client++)
-			if (IsClientInGame(client) && IsPlayerAlive(client))
-				this.Or(client);
-	}
-	int ToArray(int[] player, int maxplayers) {
-		int i;
-		for (int client=1; client <= MaxClients && i < maxplayers; client++) {
-			if (this.Get(client)) { 
-				player[i] = client;
-				i++;
-			}
-		}
-		return i;
-	}
-	int ToArrayList(ArrayList list) {
-		for (int client=1; client <= MaxClients; client++) {
-			if (this.Get(client)) { 
-				list.Push(client);
-			}
-		}
-		return list.Length;
-	}
-	bool Any() {
-		return this.partition[0] || this.partition[1] || this.partition[2] || this.partition[3];
-	}
-	int Count() {
-		int count;
-		for (int i=0; i<32; i++) {
-			count += ((this.partition[0] & (1<<i)) ? 1 : 0) +
-					((this.partition[1] & (1<<i)) ? 1 : 0) +
-					((this.partition[2] & (1<<i)) ? 1 : 0) +
-					((this.partition[3] & (1<<i)) ? 1 : 0);
-		}
-		return count;
-	}
-}
 
 PlayerBits teamRedBits, teamBlueBits, aliveBits;
 PlayerBits canSeeBits[MAXPLAYERS+1];
@@ -208,17 +102,40 @@ public void OnLibraryAdded(const char[] name) {
 	if (StrEqual(name, "scp")) chatProcessorLoaded |= CHAT_PROCESSOR_SCPREDUX;
 	if (StrEqual(name, "CiderChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_CIDER;
 	if (StrEqual(name, "chat-processor")) chatProcessorLoaded |= CHAT_PROCESSOR_DRIXEVEL;
+	if (StrEqual(name, "MetaChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_MCP;
+	if ((chatProcessorLoaded & CHAT_PROCESSOR_MCP) == 0) {
+		switch (chatProcessorLoaded) {
+			case CHAT_PROCESSOR_SCPREDUX, CHAT_PROCESSOR_CIDER, CHAT_PROCESSOR_DRIXEVEL: {}
+			default: { LogError("%s", "WARNING: Multiple chat processor loaded!"); }
+		}
+	}
+#if defined _mcp_included
+	else
+		MCP_HookChatMessage(MCP_OnChatMessagePost, mcpHookPost);
+#endif
 }
 public void OnLibraryRemoved(const char[] name) {
 	if (StrEqual(name, "scp")) chatProcessorLoaded &=~ CHAT_PROCESSOR_SCPREDUX;
 	if (StrEqual(name, "CiderChatProcessor")) chatProcessorLoaded &=~ CHAT_PROCESSOR_CIDER;
 	if (StrEqual(name, "chat-processor")) chatProcessorLoaded &=~ CHAT_PROCESSOR_DRIXEVEL;
+	if (StrEqual(name, "MetaChatProcessor")) chatProcessorLoaded &=~ CHAT_PROCESSOR_MCP;
 }
 public void OnAllPluginsLoaded() {
 	chatProcessorLoaded = 0;
 	if (LibraryExists("scp")) chatProcessorLoaded |= CHAT_PROCESSOR_SCPREDUX;
 	if (LibraryExists("CiderChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_CIDER;
 	if (LibraryExists("chat-processor")) chatProcessorLoaded |= CHAT_PROCESSOR_DRIXEVEL;
+	if (LibraryExists("MetaChatProcessor")) chatProcessorLoaded |= CHAT_PROCESSOR_MCP;
+	if ((chatProcessorLoaded & CHAT_PROCESSOR_MCP) == 0) {
+		switch (chatProcessorLoaded) {
+			case CHAT_PROCESSOR_SCPREDUX, CHAT_PROCESSOR_CIDER, CHAT_PROCESSOR_DRIXEVEL: {}
+			default: { LogError("%s", "WARNING: Multiple chat processor loaded!"); }
+		}
+	}
+#if defined _mcp_included
+	else
+		MCP_HookChatMessage(MCP_OnChatMessagePost, mcpHookPost);
+#endif
 }
 #endif
 
@@ -477,7 +394,9 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 	PlayerBits targets;
 	
 	//if the player is disguised, play as say to not give away the actual team
-	if (teamSay && !(TF2_IsPlayerInCondition(client, TFCond_Disguising)|TF2_IsPlayerInCondition(client, TFCond_Disguised)|TF2_IsPlayerInCondition(client, TFCond_DisguisedAsDispenser))) {
+	if (teamSay && !(TF2_IsPlayerInCondition(client, TFCond_Disguising) ||
+	                 TF2_IsPlayerInCondition(client, TFCond_Disguised) ||
+	                 TF2_IsPlayerInCondition(client, TFCond_DisguisedAsDispenser))) {
 		//otherwise we mask the team for team say
 		targets.OrBits((team==TFTeam_Red) ? teamRedBits : teamBlueBits);
 	} else {
@@ -496,7 +415,7 @@ static void handleSay(int client, const char[] message, bool teamSay) {
 
 public Action commandSay(int client, const char[] command, int argc) {
 #if defined _use_chatprocessor
-	if (chatProcessorLoaded) return Plugin_Continue;
+	if (chatProcessorLoaded != 0) return Plugin_Continue;
 #endif
 	if (cval_BubbleEnabled != 1 || !cookieEnabledBits.Get(client) ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
@@ -510,7 +429,7 @@ public Action commandSay(int client, const char[] command, int argc) {
 
 public Action commandSayTeam(int client, const char[] command, int argc) {
 #if defined _use_chatprocessor
-	if (chatProcessorLoaded) return Plugin_Continue;
+	if (chatProcessorLoaded != 0) return Plugin_Continue;
 #endif
 	if (cval_BubbleEnabled == 0 || !cookieEnabledBits.Get(client) ) return Plugin_Continue;
 	char message[MAX_ANNOTATION_LENGTH];
@@ -569,6 +488,12 @@ public void CCP_OnChatMessagePost(int author, ArrayList recipients, const char[]
 #if defined _chat_processor_included
 public void CP_OnChatMessagePost(int author, ArrayList recipients, const char[] flagstring, const char[] formatstring, const char[] name, const char[] message, bool processcolors, bool removecolors) {
 	if (chatProcessorLoaded != CHAT_PROCESSOR_DRIXEVEL) return;
+	anycp_OnChatPost(author, recipients, message);
+}
+#endif
+
+#if defined _mcp_included
+public void MCP_OnChatMessagePost(int author, ArrayList recipients, mcpSenderFlag senderflags, mcpTargetGroup targetgroup, mcpMessageOption options, const char[] targetgroupColor, const char[] name, const char[] message) {
 	anycp_OnChatPost(author, recipients, message);
 }
 #endif
