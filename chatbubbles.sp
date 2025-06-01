@@ -14,13 +14,13 @@
 #tryinclude <metachatprocessor>
 #define REQUIRE_PLUGIN
 
-#include "playerbits.inc"
-#include "tf2hudmsg.inc"
+#include <playerbits>
+#include <tf2hudmsg>
 
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "24w41b"
+#define PLUGIN_VERSION "25w22a"
 
 #define COOKIE_STATE "clientChatbubbleState"
 
@@ -381,7 +381,7 @@ static void bubble(int client, const char[] original, PlayerBits visibility) {
 	}
 	//diplay message
 	CursorAnnotation ca = CursorAnnotation();
-	for (int i=1; i<=MaxClients; i++) 
+	for (int i=1; i<=MaxClients; i++)
 		ca.SetVisibilityFor(i, visibility.Get(i));
 	ca.ParentEntity = client;
 	float pos[3];
@@ -515,6 +515,9 @@ public void CP_OnChatMessagePost(int author, ArrayList recipients, const char[] 
 
 #if defined _mcp_included
 public void MCP_OnChatMessagePost(int author, ArrayList recipients, mcpSenderFlag senderflags, mcpTargetGroup targetgroup, mcpMessageOption options, const char[] targetgroupColor, const char[] name, const char[] message) {
-	anycp_OnChatPost(author, recipients, message);
+	char buffer[MCP_MAXLENGTH_INPUT];
+	strcopy(buffer, sizeof(buffer), message);
+	MCP_RemoveTextColors(buffer, sizeof(buffer), false);
+	anycp_OnChatPost(author, recipients, buffer);
 }
 #endif
